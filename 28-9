@@ -1,0 +1,67 @@
+# This script is customized from the original, which can be found here:
+# https://github.com/mkpascal/mk_liquidsoap_processing/blob/master/process.liq
+# 
+# It can be added to your station via `Utilities` > `Edit Liquidsoap Configuration`
+# where it can then be pasted into the bottom-most open text area, before the broadcasts
+# are sent out to the various sources.
+
+# Functions / Modules --------------------->
+
+# Compressor Module / Limiter Module
+compressor = ladspa.sc4(rms_peak = 0.)
+limiter = ladspa.tap_limiter(limit_level = -1.5)
+
+# Single Band Compressor
+def multiband_band(process, from, to, attack, release, ratio, threshold, gain)
+	from_filter = filter.iir.eq.high(frequency = from,)
+	to_filter = filter.iir.eq.low(frequency = to,)
+	process_filtered = to_filter(from_filter(process))
+	process_compressed = limiter(compressor(attack_time = attack, release_time = release, threshold_level = threshold, ratio=ratio, makeup_gain = gain, process_filtered))
+	process_compressed
+end
+
+# Audio Input --------------------->
+
+process = radio
+
+# Processing Blocks --------------------->
+
+# Gate
+# process = ladspa.gate(process, threshold = -60.0, attack = 0.15, hold = 1.0, decay = 200.0, range = -25.0)
+
+# Wideband AGC + Pre-Processing
+process = normalize(target = -0.5, window = 0.03, gain_min = -26., gain_max = 10., process)
+process = ladspa.sc4(rms_peak=0.3, attack_time = 0.5, release_time = 3., threshold_level = -36.0, ratio=1., makeup_gain = 1., process)
+
+# Stereo Expander
+process = ladspa.matrixspatialiser(width=16, process)
+
+# Bass EQ
+process = ladspa.tap_equalizer(band_1_freq=75., band_1_gain=4.5, process)
+process = ladspa.tap_equalizer(band_1_freq=150., band_1_gain=-2., process)
+
+# 5 Bands Compress/Limit
+process = add(normalize=false,
+  [
+  multiband_band(process, 0., 200., 3.5, 30., 4., -10., 1.5),
+  multiband_band(process, 200., 1000., 2.25, 40., 3., -13., 1.5),
+  multiband_band(process, 1000., 3500., 2.25, 40., 4., -9., 1.5),
+  multiband_band(process, 3500., 6500., 2.25, 60., 3., -6., 0.5),
+  multiband_band(process, 6500., 20000., 2.25, 70., 3., -4., 0.5)
+  ])
+
+# 2 Bands Compress/Limit
+process = add(normalize=false,
+  [
+  multiband_band(process, 0., 200., 10., 30., 2., -4., 0.),
+  multiband_band(process, 200., 20000., 10., 40., 2., -2., -2.)
+  ])
+
+# De-esser
+process = ladspa.tap_deesser(threshold_level=-5., frequency=6000., process)
+
+# Final Limiter
+process = limiter(process)
+
+# Audio Output --------------------->
+radio = process
